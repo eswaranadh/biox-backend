@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "biochatter-server"
-version = "0.5.4"
+version = "0.5.5"
 description = "FastAPI server to provide RESTful API for biochatter"
 authors = [
     "fengsh <shaohong.feng.78@gmail.com>",
