@@ -12,21 +12,28 @@ from pymilvus import MilvusException
 import pymilvus
 from src.constants import (
     ARGS_CONNECTION_ARGS,
+    ERROR_EXCEEDS_TOKEN_LIMIT,
     ERROR_MILVUS_CONNECT_FAILED,
     ERROR_MILVUS_UNKNOWN,
     ERROR_OK,
-    ERROR_UNKNOW,
+    ERROR_UNKNOWN,
     ERRSTR_MILVUS_CONNECT_FAILED,
 )
-from src.conversation_manager import chat, has_conversation, initialize_conversation
+from src.conversation_manager import (
+    chat,
+    has_conversation,
+    initialize_conversation,
+)
 
 from src.datatypes import (
-    ChatCompletionsPostModel, 
+    ChatCompletionsPostModel,
+    AuthTypeEnum, 
     KgConnectionStatusPostModel, 
     RagAllDocumentsPostModel, 
     RagConnectionStatusPostModel, 
     RagDocumentDeleteModel, 
     RagNewDocumentPostModel,
+    TokenUsagePostModel,
 )
 from src.document_embedder import (
     get_all_documents,
@@ -35,8 +42,16 @@ from src.document_embedder import (
     remove_document,
 )
 from src.kg_agent import get_connection_status as get_kg_connection_status
-from src.utils import get_auth
+from src.llm_auth import (
+    llm_get_auth_token_limitation,
+    llm_get_auth_type,
+    llm_get_client_auth,
+    llm_get_embedding_function,
+    llm_get_user_name_and_model,
+)
 from src.job_recycle_conversations import run_scheduled_job_continuously
+from src.token_usage_database import get_token_usage
+from src.utils import need_restrict_usage
 
 # prepare logger
 logging.basicConfig(level=logging.INFO)
@@ -122,11 +137,12 @@ def extract_and_process_params_from_json_body(
 
 @app.post("/v1/chat/completions", description="chat completions")
 async def handle(
-    authorization: Annotated[str | None, Header()],
     # item: ChatCompletionsPostModel,
     request: Request, # ChatCompletionsPostModel,
 ):
-    auth = get_auth(authorization)
+    authorization = request.headers.get("Authorization")
+    auth = llm_get_client_auth(authorization)
+    auth_type = llm_get_auth_type(auth)
     jsonBody = await request.json()
 
     sessionId = extract_and_process_params_from_json_body(
@@ -175,29 +191,38 @@ async def handle(
         jsonBody, "useAutoAgent", defaultVal=False
     )
 
+    modelConfig={
+        "temperature": temperature,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "top_p": top_p,
+        "model": model,
+        "chatter_type": llm_get_auth_type(auth).value,
+        "openai_api_key": auth,
+    }
+
+    restrict, limitation = need_restrict_usage(client_key=auth, model=model)
+    if restrict:
+        return {
+            "code": ERROR_EXCEEDS_TOKEN_LIMIT,
+            "limitation": limitation
+        }
     if not has_conversation(sessionId):
         initialize_conversation(
             sessionId=sessionId,
-            modelConfig={
-                "temperature": temperature,
-                "presence_penalty": presence_penalty,
-                "frequency_penalty": frequency_penalty,
-                "top_p": top_p,
-                "model": model,
-                "auth": auth,
-            },
+            modelConfig=modelConfig,        
         )
     try:
         (msg, usage, contexts) = chat(
             sessionId=sessionId,
             messages=messages, 
-            authKey=auth, 
             ragConfig=ragConfig, 
             useRAG=useRAG, 
             kgConfig=kgConfig, 
             useKG=useKG, 
             oncokbConfig=oncokbConfig, 
-            useAutoAgent=useAutoAgent, 
+            useAutoAgent=useAutoAgent,
+            modelConfig=modelConfig,
         )
         return {
             "choices": [
@@ -235,11 +260,15 @@ def newDocument(
     ragConfig[ARGS_CONNECTION_ARGS] = process_connection_args(
         RAG_VECTORSTORE, ragConfig[ARGS_CONNECTION_ARGS]
     )
-    auth = get_auth(authorization)
+    auth = llm_get_client_auth(authorization)
+    embedding_func = llm_get_embedding_function(auth)
     # TODO: consider to be compatible with XinferenceDocumentEmbedder
     try:
         doc_id = new_embedder_document(
-            authKey=auth, tmpFile=tmpFile, filename=filename, rag_config=ragConfig
+            tmp_file=tmpFile,
+            filename=filename,
+            rag_config=ragConfig,
+            embedding_function=embedding_func
         )
         return {"id": doc_id, "code": ERROR_OK}
     except MilvusException as e:
@@ -251,7 +280,7 @@ def newDocument(
         else:
             return {"error": e.message, "code": ERROR_MILVUS_UNKNOWN}
     except Exception as e:
-        return {"error": str(e), "code": ERROR_UNKNOW}
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 
 @app.post("/v1/rag/alldocuments", description="retrieves all documents")
@@ -264,13 +293,18 @@ def getAllDocuments(
             doc["id"] = str(doc["id"])
         return docs
 
-    auth = get_auth(authorization)
+    auth = llm_get_client_auth(authorization)
+    embedding_func = llm_get_embedding_function(auth)
     connection_args = item.connectionArgs
     connection_args = vars(connection_args)
     connection_args = process_connection_args(RAG_VECTORSTORE, connection_args)
     doc_ids = item.docIds
     try:
-        docs = get_all_documents(auth, connection_args, doc_ids=doc_ids)
+        docs = get_all_documents(
+            connection_args=connection_args,
+            doc_ids=doc_ids,
+            embedding_function=embedding_func,
+        )
         docs = post_process(docs)
         return {"documents": docs, "code": ERROR_OK}
     except MilvusException as e:
@@ -282,7 +316,7 @@ def getAllDocuments(
         else:
             return {"error": e.message, "code": ERROR_MILVUS_UNKNOWN}
     except Exception as e:
-        return {"error": str(e), "code": ERROR_UNKNOW}
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 
 @app.delete("/v1/rag/document", description="removes a document")
@@ -290,7 +324,8 @@ def removeDocument(
     authorization: Annotated[str | None, Header()],
     item: RagDocumentDeleteModel,
 ):
-    auth = get_auth(authorization)
+    auth = llm_get_client_auth(authorization)
+    embedding_func = llm_get_embedding_function(auth)
     docId = item.docId
     connection_args = item.connectionArgs
     connection_args = vars(connection_args)
@@ -300,7 +335,10 @@ def removeDocument(
         return {"error": "Failed to find document"}
     try:
         remove_document(
-            docId, authKey=auth, connection_args=connection_args, doc_ids=doc_ids
+            doc_id=docId,
+            connection_args=connection_args,
+            doc_ids=doc_ids,
+            embedding_function=embedding_func,
         )
         return {"id": docId, "code": ERROR_OK}
     except MilvusException as e:
@@ -312,7 +350,7 @@ def removeDocument(
         else:
             return {"error": e.message, "code": ERROR_MILVUS_UNKNOWN}
     except Exception as e:
-        return {"error": str(e), "code": ERROR_UNKNOW}
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 
 @app.post("/v1/rag/connectionstatus", description="returns connection status")
@@ -321,11 +359,15 @@ def getConnectionStatus(
     item: RagConnectionStatusPostModel,
 ):
     try:
-        auth = get_auth(authorization)
+        auth = llm_get_client_auth(authorization)
+        embedding_func = llm_get_embedding_function(auth)
         connection_args = item.connectionArgs
         connection_args = vars(connection_args)
         connection_args = process_connection_args(RAG_VECTORSTORE, connection_args)
-        connected = get_vectorstore_connection_status(connection_args, auth)
+        connected = get_vectorstore_connection_status(
+            connection_args=connection_args,
+            embedding_function=embedding_func,
+        )
         return {
             "status": "connected" if connected else "disconnected",
             "code": ERROR_OK,
@@ -333,7 +375,7 @@ def getConnectionStatus(
     except MilvusException as e:
         return {"error": e.message, "code": ERROR_MILVUS_UNKNOWN}
     except Exception as e:
-        return {"error": str(e), "code": ERROR_UNKNOW}
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 
 @app.post(
@@ -352,7 +394,30 @@ def getKGConnectionStatus(
             "code": ERROR_OK,
         }
     except Exception as e:
-        return {"error": str(e), "code": ERROR_UNKNOW}
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.post(
+   "/v1/tokenusage", description="returns token usage for current user"
+)
+def getTokenUsage(
+    authorization: Annotated[str | None, Header()],
+    item: TokenUsagePostModel,
+):
+    try:
+        auth = llm_get_client_auth(client_key=authorization)
+        auth_type = llm_get_auth_type(auth)
+        user, model = llm_get_user_name_and_model(auth, item.session_id, item.model)
+        res = get_token_usage(user, model)
+        res = res if res is not None else {
+            "completion_tokens": 0,
+            "prompt_tokens": 0,
+            "total_tokens": 0,
+            "model": model,
+        }
+        return {"code": ERROR_OK, "tokens": res, "auth_type": auth_type.value}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 
 if __name__ == "__main__":

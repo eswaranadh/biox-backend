@@ -14,10 +14,15 @@ def find_schema_info_node(connection_args: dict):
         """
         db_uri = "bolt://" + connection_args.get("host") + \
             ":" + f"{connection_args.get('port')}"
-        neodriver = nu.Driver(
-            db_name=connection_args.get("db_name") or "neo4j",
-            db_uri=db_uri,
-        )
+        try:
+            neodriver = nu.Driver(
+                db_name=connection_args.get("db_name") or "neo4j",
+                db_uri=db_uri,
+                raise_errors=True,
+            )
+        except Exception as e:
+            logger.error(e)
+            return None
         result = neodriver.query("MATCH (n:Schema_info) RETURN n LIMIT 1")
 
         if result[0]:

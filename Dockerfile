@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     make
 
 # Copy the poetry.lock and pyproject.toml files to the container
-COPY poetry.lock pyproject.toml ./
+COPY poetry.lock pyproject.toml README.md ./
+COPY ./src/ ./src/
 
 # Install Poetry
 RUN pip install --no-cache-dir poetry

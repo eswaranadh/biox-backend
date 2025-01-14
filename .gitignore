@@ -15,3 +15,8 @@ logs/*.log
 
 # Intellij IDEA
 .idea
+
+.coverage
+
+# db
+data/*.db

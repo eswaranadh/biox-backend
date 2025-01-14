@@ -7,6 +7,9 @@ authors = [
     "Sebastian Lobentanzer <sebastian.lobentanzer@gmail.com>"
 ]
 license = "MIT"
+packages = [
+    { include = "src" }
+]
 readme = "README.md"
 
 [tool.poetry.dependencies]
@@ -18,10 +21,15 @@ gunicorn = "^21.2.0"
 neo4j-utils = "^0.0.7"
 fastapi = "^0.111.0"
 langchain = "0.2.5"
-biochatter = "0.7.5"
+langchain-community = "0.2.5"
+langchain-openai = "0.1.14"
+biochatter = "0.8.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
+bump2version = "^1.0.1"
+coverage = "^7.6.0"
+coverage-badge = "^1.1.1"
 
 [build-system]
 requires = ["poetry-core"]
@@ -31,5 +39,5 @@ build-backend = "poetry.core.masonry.api"
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = [
-    "tests",
+    "unittests",
 ]

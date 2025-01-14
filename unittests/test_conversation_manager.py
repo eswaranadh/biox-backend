@@ -1,4 +1,6 @@
-
+import os
+from unittest.mock import patch
+from src.constants import AZURE_OPENAI_ENDPOINT, OPENAI_API_KEY, OPENAI_API_TYPE, OPENAI_API_VERSION, OPENAI_DEPLOYMENT_NAME, OPENAI_MODEL
 from src.conversation_manager import (
     get_conversation, 
     has_conversation,
@@ -12,7 +14,14 @@ def test_parse_api_key():
     res = _parse_api_key("Bearer balahbalah")
     assert res == "balahbalah"
 
-def test_get_conversation():
+#@patch("src.conversation_session.AzureGptConversation")
+@patch.dict(os.environ, {
+    OPENAI_API_KEY: "abcdefg",
+    OPENAI_API_VERSION: "2024-02-01",
+    OPENAI_MODEL: "gpt-4",
+})
+@patch("src.conversation_session.GptConversation")
+def test_get_conversation(mock_GptConversation):
     modelConfig = {
         **defaultModelConfig,
         "chatter_type": "ServerOpenAI",
@@ -25,7 +34,13 @@ def test_get_conversation():
     assert conversation.chatter is not None
     assert has_conversation("balahbalah") 
 
-def test_remove_conversation():
+@patch.dict(os.environ, {
+    OPENAI_API_KEY: "abcdefg",
+    OPENAI_API_VERSION: "2024-02-01",
+    OPENAI_MODEL: "gpt-4",
+})
+@patch("src.conversation_session.GptConversation")
+def test_remove_conversation(mock_GptConversation):
     sessionId = "test"
     assert not has_conversation(sessionId)
     initialize_conversation(
@@ -39,6 +54,7 @@ def test_remove_conversation():
             "sendMemory": True,
             "historyMessageCount": 4,
             "compressMessageLengthThreshold": 2000,
+            "chatter_type": "ServerOpenAI",
         }
     )
     assert has_conversation(sessionId)

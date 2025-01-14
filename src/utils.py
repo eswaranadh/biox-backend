@@ -1,18 +1,12 @@
 
-from typing import List, Optional, Tuple
+import base64
 import os
+from typing import List, Optional, Tuple
 
-from flask import Request
-from src.constants import OPENAI_API_KEY
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.embeddings.azure_openai import AzureOpenAIEmbeddings
-
-def parse_api_key(bearToken: str) -> str:
-    if not bearToken:
-        return ""
-    bearToken = bearToken.strip()
-    bearToken = bearToken.replace("Bearer ", "")
-    return bearToken
+from src.constants import TOKEN_DAILY_LIMITATION
+from src.datatypes import AuthTypeEnum
+from src.llm_auth import llm_get_auth_type, llm_get_user_name_and_model
+from src.token_usage_database import get_token_usage
 
 def get_rag_agent_prompts() -> List[str]:
     return [
@@ -22,38 +16,19 @@ def get_rag_agent_prompts() -> List[str]:
         "consistencies and inconsistencies with all other information available to "
         "you: {statements}",
     ]
-
-def get_auth(authorization: str):
-    # If OPENAI_API_KEY is provided by server, we will use it
-    if OPENAI_API_KEY in os.environ and os.environ[OPENAI_API_KEY]:
-        return os.environ[OPENAI_API_KEY]
     
-    # Otherwise, we will parse it from request
-    auth = authorization
-    auth = auth if auth is not None and len(auth) > 0 else ""
-    return parse_api_key(auth)
-
-def get_azure_embedding_deployment() -> Tuple[bool, str, str]:
-    is_azure = os.environ.get("OPENAI_API_TYPE", "") == "azure"
-    deployment = os.environ.get("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME", "")
-    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
-    return (is_azure, deployment, endpoint)
-
-def get_embedding_function(
-    is_azure: Optional[bool] = False,
-    api_key: Optional[str] = None,
-    model: Optional[str] = "text-embedding-ada-002",
-    azure_deployment: Optional[str] = None,
-    azure_endpoint: Optional[str] = None,
-):
-    return (
-        OpenAIEmbeddings(api_key=api_key, model=model)
-        if not is_azure else
-        AzureOpenAIEmbeddings(
-            api_key=api_key,
-            azure_deployment=azure_deployment,
-            azure_endpoint=azure_endpoint,
-            model=model,
-        )
+def need_restrict_usage(client_key: str, model: str) -> Tuple[bool, int]:
+    auth_type = llm_get_auth_type(client_key=client_key)
+    if auth_type == AuthTypeEnum.ClientOpenAI or \
+       auth_type == AuthTypeEnum.ClientWASM:
+        return False, -1
+    limitation = int(os.environ.get(TOKEN_DAILY_LIMITATION, -1))
+    if limitation < 0:
+        return False, -1
+    user_name, actual_model = llm_get_user_name_and_model(
+        client_key=client_key,
+        session_id=None,
+        model=model,
     )
-
+    token_usage = get_token_usage(user_name, actual_model)
+    return token_usage["total_tokens"] >= limitation, limitation
