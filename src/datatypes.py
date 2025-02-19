@@ -1,4 +1,3 @@
-
 from enum import Enum
 from typing import Any, List, Optional
 from pydantic import BaseModel
@@ -57,6 +56,7 @@ class TokenUsagePostModel(BaseModel):
 
 class ChatCompletionsPostModel(BaseModel):
     session_id: str
+    chat_id: Optional[int] = None
     messages: List[Message]
     model: str
     temperature: int
@@ -70,7 +70,8 @@ class ChatCompletionsPostModel(BaseModel):
     stream: Optional[bool]=None
     oncokbConfig: Optional[OncoKBConfig]=None
     useAutoAgent: Optional[bool]=None
-    
+    project_id: Optional[int]=None
+
 class AuthTypeEnum(Enum):
     Unknown = "Unknown"
     ServerAzureOpenAI = "ServerAzureOpenAI"
@@ -87,10 +88,29 @@ class ModelConfig(BaseModel):
     chatter_type: Optional[AuthTypeEnum]=AuthTypeEnum.Unknown
     openai_api_key: Optional[str]=None
 
+# Project-related models
+class ProjectCreateModel(BaseModel):
+    name: str
+    description: Optional[str] = ""
 
+class ProjectUpdateModel(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
 
+class ProjectIdModel(BaseModel):
+    project_id: int
 
+# Chat-related models
+class ChatCreateModel(BaseModel):
+    project_id: int
+    name: str = "New Chat"
 
+class ChatUpdateModel(BaseModel):
+    name: str
 
-
-
+class ChatModel(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    created_at: str
+    updated_at: str

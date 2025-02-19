@@ -34,6 +34,12 @@ from src.datatypes import (
     RagDocumentDeleteModel, 
     RagNewDocumentPostModel,
     TokenUsagePostModel,
+    ProjectCreateModel,
+    ProjectUpdateModel,
+    ProjectIdModel,
+    ChatCreateModel,
+    ChatUpdateModel,
+    ChatModel,
 )
 from src.document_embedder import (
     get_all_documents,
@@ -50,6 +56,20 @@ from src.llm_auth import (
     llm_get_user_name_and_model,
 )
 from src.job_recycle_conversations import run_scheduled_job_continuously
+from src.project_manager import (
+    create_project,
+    get_user_projects,
+    get_project,
+    update_project,
+    delete_project,
+)
+from src.chat_manager import (
+    create_chat,
+    get_project_chats,
+    get_chat,
+    update_chat,
+    delete_chat,
+)
 from src.token_usage_database import get_token_usage
 from src.utils import need_restrict_usage
 
@@ -108,6 +128,7 @@ DEFAULT_RAGCONFIG = {
 }
 RAG_KG = "KG"
 RAG_VECTORSTORE = "VS"
+KG_VECTORSTORE = "KGVS"
 
 
 def process_connection_args(rag: str, connection_args: dict) -> dict:
@@ -125,6 +146,13 @@ def process_connection_args(rag: str, connection_args: dict) -> dict:
             )
         port = connection_args.get("port", "7687")
         connection_args["port"] = f"{port}"
+    elif rag == KG_VECTORSTORE:
+        if connection_args.get("host", "").lower() == "local":
+            connection_args["host"] = (
+                "127.0.0.1" if "KGHOST" not in os.environ else os.environ["KGHOST"]
+            )
+        port = connection_args.get("port", "19530")
+        connection_args["port"] = f"{port}"
     return connection_args
 
 def extract_and_process_params_from_json_body(
@@ -135,94 +163,207 @@ def extract_and_process_params_from_json_body(
     val = json.get(name, defaultVal)
     return val
 
-@app.post("/v1/chat/completions", description="chat completions")
-async def handle(
-    # item: ChatCompletionsPostModel,
-    request: Request, # ChatCompletionsPostModel,
+@app.post("/v1/chats/create", description="Create a new chat in a project")
+def createChat(
+    authorization: Annotated[str | None, Header()],
+    item: ChatCreateModel,
 ):
-    authorization = request.headers.get("Authorization")
-    auth = llm_get_client_auth(authorization)
-    auth_type = llm_get_auth_type(auth)
-    jsonBody = await request.json()
-
-    sessionId = extract_and_process_params_from_json_body(
-        jsonBody, "session_id", defaultVal=""
-    )
-    messages = extract_and_process_params_from_json_body(
-        jsonBody, "messages", defaultVal=[]
-    )
-    model = extract_and_process_params_from_json_body(
-        jsonBody, "model", defaultVal="gpt-3.5-turbo"
-    )
-    temperature = extract_and_process_params_from_json_body(
-        jsonBody, "temperature", defaultVal=0.7
-    )
-    presence_penalty = extract_and_process_params_from_json_body(
-        jsonBody, "presence_penalty", defaultVal=0
-    )
-    frequency_penalty = extract_and_process_params_from_json_body(
-        jsonBody, "frequency_penalty", defaultVal=0
-    )
-    top_p = extract_and_process_params_from_json_body(jsonBody, "top_p", defaultVal=1)
-    ragConfig = extract_and_process_params_from_json_body(
-        jsonBody, "ragConfig", defaultVal=None
-    )
-    if ragConfig is not None:
-        ragConfig[ARGS_CONNECTION_ARGS] = process_connection_args(
-            RAG_VECTORSTORE, ragConfig[ARGS_CONNECTION_ARGS]
-        )
-    useRAG = extract_and_process_params_from_json_body(
-        jsonBody, "useRAG", defaultVal=False
-    )
-    kgConfig = extract_and_process_params_from_json_body(
-        jsonBody, "kgConfig", defaultVal=None
-    )
-    if kgConfig is not None:
-        kgConfig[ARGS_CONNECTION_ARGS] = process_connection_args(
-            RAG_KG, kgConfig[ARGS_CONNECTION_ARGS]
-        )
-    useKG = extract_and_process_params_from_json_body(
-        jsonBody, "useKG", defaultVal=False
-    )
-    oncokbConfig = extract_and_process_params_from_json_body(
-        jsonBody, "oncokbConfig", defaultVal=None
-    )
-    useAutoAgent = extract_and_process_params_from_json_body(
-        jsonBody, "useAutoAgent", defaultVal=False
-    )
-
-    modelConfig={
-        "temperature": temperature,
-        "presence_penalty": presence_penalty,
-        "frequency_penalty": frequency_penalty,
-        "top_p": top_p,
-        "model": model,
-        "chatter_type": llm_get_auth_type(auth).value,
-        "openai_api_key": auth,
-    }
-
-    restrict, limitation = need_restrict_usage(client_key=auth, model=model)
-    if restrict:
-        return {
-            "code": ERROR_EXCEEDS_TOKEN_LIMIT,
-            "limitation": limitation
-        }
-    if not has_conversation(sessionId):
-        initialize_conversation(
-            sessionId=sessionId,
-            modelConfig=modelConfig,        
-        )
     try:
+        auth = llm_get_client_auth(authorization)
+        user, _ = llm_get_user_name_and_model(auth)
+        
+        # Verify project exists and belongs to user
+        project = get_project(user, item.project_id)
+        if project is None:
+            return {"error": "Project not found", "code": ERROR_UNKNOWN}
+        
+        chat = create_chat(item.project_id, user, item.name)
+        if chat is None:
+            return {"error": "Failed to create chat", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK, "chat": chat}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.get("/v1/projects/{project_id}/chats", description="Get all chats in a project")
+def getProjectChats(
+    authorization: Annotated[str | None, Header()],
+    project_id: int,
+):
+    try:
+        auth = llm_get_client_auth(authorization)
+        user, _ = llm_get_user_name_and_model(auth)
+        
+        # Verify project exists and belongs to user
+        project = get_project(user, project_id)
+        if project is None:
+            return {"error": "Project not found", "code": ERROR_UNKNOWN}
+        
+        chats = get_project_chats(project_id, user)
+        return {"code": ERROR_OK, "chats": chats}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.get("/v1/chats/{chat_id}", description="Get a specific chat")
+def getChat(
+    authorization: Annotated[str | None, Header()],
+    chat_id: int,
+):
+    try:
+        auth = llm_get_client_auth(authorization)
+        user, _ = llm_get_user_name_and_model(auth)
+        chat = get_chat(chat_id, user)
+        if chat is None:
+            return {"error": "Chat not found", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK, "chat": chat}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.put("/v1/chats/{chat_id}", description="Update a chat")
+def updateChat(
+    authorization: Annotated[str | None, Header()],
+    chat_id: int,
+    item: ChatUpdateModel,
+):
+    try:
+        auth = llm_get_client_auth(authorization)
+        user, _ = llm_get_user_name_and_model(auth)
+        success = update_chat(chat_id, user, item.name)
+        if not success:
+            return {"error": "Chat not found or update failed", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.delete("/v1/chats/{chat_id}", description="Delete a chat")
+def deleteChat(
+    authorization: Annotated[str | None, Header()],
+    chat_id: int,
+):
+    try:
+        auth = llm_get_client_auth(authorization)
+        user, _ = llm_get_user_name_and_model(auth)
+        success = delete_chat(chat_id, user)
+        if not success:
+            return {"error": "Chat not found or deletion failed", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.post("/v1/chat/completions", description="chat completions")
+async def chat_completions(request: Request):
+    try:
+        authorization = request.headers.get("Authorization")
+        auth = llm_get_client_auth(authorization)
+        auth_type = llm_get_auth_type(auth)
+        jsonBody = await request.json()
+
+        sessionId = extract_and_process_params_from_json_body(
+            jsonBody, "session_id", defaultVal=""
+        )
+        chat_id = extract_and_process_params_from_json_body(
+            jsonBody, "chat_id", defaultVal=None
+        )
+        messages = extract_and_process_params_from_json_body(
+            jsonBody, "messages", defaultVal=[]
+        )
+        model = extract_and_process_params_from_json_body(
+            jsonBody, "model", defaultVal="gpt-3.5-turbo"
+        )
+        temperature = extract_and_process_params_from_json_body(
+            jsonBody, "temperature", defaultVal=0.7
+        )
+        presence_penalty = extract_and_process_params_from_json_body(
+            jsonBody, "presence_penalty", defaultVal=0
+        )
+        frequency_penalty = extract_and_process_params_from_json_body(
+            jsonBody, "frequency_penalty", defaultVal=0
+        )
+        top_p = extract_and_process_params_from_json_body(
+            jsonBody, "top_p", defaultVal=1
+        )
+        useRAG = extract_and_process_params_from_json_body(
+            jsonBody, "useRAG", defaultVal=False
+        )
+        useKG = extract_and_process_params_from_json_body(
+            jsonBody, "useKG", defaultVal=False
+        )
+        ragConfig = extract_and_process_params_from_json_body(
+            jsonBody, "ragConfig", defaultVal=DEFAULT_RAGCONFIG.copy()
+        )
+        kgConfig = extract_and_process_params_from_json_body(
+            jsonBody, "kgConfig", defaultVal={}
+        )
+        useAutoAgent = extract_and_process_params_from_json_body(
+            jsonBody, "useAutoAgent", defaultVal=False
+        )
+        oncokbConfig = extract_and_process_params_from_json_body(
+            jsonBody, "oncokbConfig", defaultVal={}
+        )
+        project_id = extract_and_process_params_from_json_body(
+            jsonBody, "project_id", defaultVal=None
+        )
+
+        # If chat_id is provided, verify it exists and belongs to the user
+        if chat_id is not None:
+            user, _ = llm_get_user_name_and_model(auth)
+            chat = get_chat(chat_id, user)
+            if chat is None:
+                return {"error": "Chat not found", "code": ERROR_UNKNOWN}
+            # Use chat's project_id if project_id not explicitly provided
+            if project_id is None:
+                project_id = chat["project_id"]
+
+        # If project_id is provided, verify it exists and belongs to the user
+        if project_id is not None:
+            user, _ = llm_get_user_name_and_model(auth)
+            project = get_project(user, project_id)
+            if project is None:
+                return {"error": "Project not found", "code": ERROR_UNKNOWN}
+
+        modelConfig = {
+            "model": model,
+            "temperature": temperature,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "top_p": top_p,
+            "chatter_type": auth_type,
+            "openai_api_key": auth,
+        }
+        
+        # Process connection args for RAG
+        if useRAG:
+            connection_args = ragConfig.get(ARGS_CONNECTION_ARGS, {})
+            connection_args = process_connection_args(RAG_VECTORSTORE, connection_args)
+            ragConfig[ARGS_CONNECTION_ARGS] = connection_args
+
+        # Process connection args for KG
+        if useKG:
+            connection_args = kgConfig.get(ARGS_CONNECTION_ARGS, {})
+            connection_args = process_connection_args(KG_VECTORSTORE, connection_args)
+            kgConfig[ARGS_CONNECTION_ARGS] = connection_args
+
+        if need_restrict_usage(auth_type, auth):
+            return {"error": ERROR_EXCEEDS_TOKEN_LIMIT, "code": ERROR_EXCEEDS_TOKEN_LIMIT}
+
+        # Use chat_id in session_id if provided
+        effective_session_id = f"{sessionId}_{chat_id}" if chat_id is not None else sessionId
+
         (msg, usage, contexts) = chat(
-            sessionId=sessionId,
-            messages=messages, 
-            ragConfig=ragConfig, 
-            useRAG=useRAG, 
-            kgConfig=kgConfig, 
-            useKG=useKG, 
-            oncokbConfig=oncokbConfig, 
+            sessionId=effective_session_id,
+            messages=messages,
+            useRAG=useRAG,
+            ragConfig=ragConfig,
+            useKG=useKG,
+            kgConfig=kgConfig,
             useAutoAgent=useAutoAgent,
+            oncokbConfig=oncokbConfig,
             modelConfig=modelConfig,
+            project_id=project_id,
         )
         return {
             "choices": [
@@ -419,6 +560,67 @@ def getTokenUsage(
         logger.error(e)
         return {"error": str(e), "code": ERROR_UNKNOWN}
 
+@app.post("/v1/projects/create", description="Create a new project")
+def createProject(
+    item: ProjectCreateModel,
+):
+    try:
+        project = create_project("public", item.name, item.description)
+        if project is None:
+            return {"error": "Project already exists or creation failed", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK, "project": project}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.get("/v1/projects", description="Get all projects")
+def getProjects():
+    try:
+        projects = get_user_projects("public")
+        return {"code": ERROR_OK, "projects": projects}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.get("/v1/projects/{project_id}", description="Get a specific project")
+def getProject(
+    project_id: int,
+):
+    try:
+        project = get_project("public", project_id)
+        if project is None:
+            return {"error": "Project not found", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK, "project": project}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.put("/v1/projects/{project_id}", description="Update a project")
+def updateProject(
+    project_id: int,
+    item: ProjectUpdateModel,
+):
+    try:
+        success = update_project("public", project_id, item.name, item.description)
+        if not success:
+            return {"error": "Project not found or update failed", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
+
+@app.delete("/v1/projects/{project_id}", description="Delete a project")
+def deleteProject(
+    project_id: int,
+):
+    try:
+        success = delete_project("public", project_id)
+        if not success:
+            return {"error": "Project not found or deletion failed", "code": ERROR_UNKNOWN}
+        return {"code": ERROR_OK}
+    except Exception as e:
+        logger.error(e)
+        return {"error": str(e), "code": ERROR_UNKNOWN}
 
 if __name__ == "__main__":
     port: int = 5001

@@ -1,0 +1,37 @@
+Title: Clinical Trial Results for GLP-1 Receptor Agonists in Type 2 Diabetes
+
+Trial ID: NCT02648204
+Phase: Phase 3
+Status: Completed
+
+Summary:
+This randomized controlled trial evaluated the efficacy and safety of GLP-1 receptor agonists in patients with type 2 diabetes. The study included 1,200 participants across multiple centers.
+
+Key Findings:
+1. HbA1c Reduction:
+- Mean reduction of 1.8% from baseline in the treatment group
+- Placebo group showed 0.4% reduction
+- Statistically significant difference (p<0.001)
+
+2. Weight Loss:
+- Average weight loss of 4.5 kg in treatment group
+- Placebo group showed 1.2 kg loss
+- Consistent with GLP-1's effect on appetite and satiety
+
+3. Blood Pressure:
+- Systolic BP reduction: 5.4 mmHg
+- Diastolic BP reduction: 2.8 mmHg
+
+Safety Profile:
+- Most common adverse events: nausea (28%), diarrhea (15%)
+- Serious adverse events: 3.2% (similar to placebo)
+- No significant increase in hypoglycemia risk
+
+Patient Demographics:
+- Age range: 18-75 years
+- Mean duration of diabetes: 8.3 years
+- Baseline HbA1c: 7.5-11.0%
+- 52% male, 48% female
+
+Conclusion:
+The trial demonstrated significant improvements in glycemic control and weight loss with an acceptable safety profile. Results support the use of GLP-1 receptor agonists as an effective treatment option for type 2 diabetes.
